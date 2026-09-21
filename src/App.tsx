@@ -1,160 +1,135 @@
+import { useCallback, useMemo, useState } from "react";
 import "./styles.css";
+import { store, useAppState } from "./ui/useStore";
+import { WineForm, type CorrectionRequest } from "./ui/WineForm";
+import { WineLibrary } from "./ui/WineLibrary";
+import { ConflictPanel } from "./ui/ConflictPanel";
+import { BatchBoard } from "./ui/BatchBoard";
+import { buildDrawPool } from "./training/batch";
+import { validateStoredWine } from "./validation/rules";
+import { versionChains } from "./data/store";
 
-const project = {
-  "id": "hxwl-08",
-  "port": 5108,
-  "title": "葡萄酒盲品训练",
-  "subtitle": "产区、品种与感官特征的盲品复习系统",
-  "stack": "React + Vite + TypeScript + CSS",
-  "theme": [
-    "#9f1239",
-    "#047857",
-    "#d97706"
-  ],
-  "domain": "葡萄酒学习",
-  "users": [
-    "侍酒师学员",
-    "讲师",
-    "爱好者"
-  ],
-  "metrics": [
-    "复习卡片",
-    "易混淆酒款",
-    "正确率",
-    "产区覆盖"
-  ],
-  "filters": [
-    "波尔多",
-    "勃艮第",
-    "纳帕",
-    "里奥哈"
-  ],
-  "fields": [
-    "产区",
-    "葡萄品种",
-    "年份",
-    "酸度",
-    "单宁",
-    "酒体",
-    "香气关键词"
-  ],
-  "records": [
-    [
-      "左岸混酿",
-      "赤霞珠",
-      "高单宁",
-      "黑醋栗、雪松、铅笔芯"
-    ],
-    [
-      "勃艮第村级",
-      "黑皮诺",
-      "中等酒体",
-      "红樱桃、蘑菇、湿叶"
-    ],
-    [
-      "里奥哈珍藏",
-      "丹魄",
-      "橡木明显",
-      "香草、椰子、熟李子"
-    ]
-  ]
-};
+interface Toast {
+  id: number;
+  msg: string;
+  kind: "ok" | "err";
+}
 
-const statusColors = ["status-ok", "status-watch", "status-danger"];
-
-function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
+function MetricCard({ label, value, tone }: { label: string; value: string; tone: string }) {
   return (
     <article className="metric-card">
       <span>{label}</span>
       <strong>{value}</strong>
-      <i className={statusColors[index % statusColors.length]} />
+      <i className={tone} />
     </article>
   );
 }
 
-function App() {
-  const values = project.metrics.map((metric: string, index: number) => {
-    const base = [84, 12, 31, 7][index % 4];
-    return String(base + index * 3);
-  });
+export default function App() {
+  const state = useAppState();
+  const [correction, setCorrection] = useState<CorrectionRequest | null>(null);
+  const [formKey, setFormKey] = useState(0);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const notify = useCallback((msg: string, kind: "ok" | "err" = "ok") => {
+    const id = Date.now() + Math.random();
+    setToasts((t) => [...t, { id, msg, kind }]);
+    window.setTimeout(() => {
+      setToasts((t) => t.filter((x) => x.id !== id));
+    }, 4200);
+  }, []);
+
+  const startCorrection = useCallback((req: CorrectionRequest) => {
+    setCorrection(req);
+    setFormKey((k) => k + 1);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
+  const finishCorrection = useCallback(() => {
+    setCorrection(null);
+    setFormKey((k) => k + 1);
+  }, []);
+
+  const stats = useMemo(() => {
+    const chains = versionChains(state.wines);
+    const conflictWines = state.wines.filter(
+      (w) => w.status === "active" && validateStoredWine(w).length > 0
+    ).length;
+    const pool = buildDrawPool(state);
+    const openBatches = state.batches.filter((b) => b.status !== "archived").length;
+    const archived = state.batches.filter((b) => b.status === "archived").length;
+    const oldVersions = state.wines.filter((w) => w.status === "superseded").length;
+    return {
+      chains: chains.length,
+      conflictWines,
+      pool: pool.pool.length,
+      regions: pool.availableRegions.length,
+      openBatches,
+      archived,
+      oldVersions,
+    };
+  }, [state]);
 
   return (
     <main className="app-shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">{project.id} · port {project.port}</p>
-          <h1>{project.title}</h1>
-          <p className="subtitle">{project.subtitle}</p>
+          <p className="eyebrow">hxwl-08 · 盲品看板</p>
+          <h1>酒款资料核验与训练批次闭环</h1>
+          <p className="subtitle">
+            录入绑定产区 / 法定品种 / 年份 / 适饮区间；核验不过不得入训；讲师复核后才能归档；
+            修正生成带原因的新版本并保留旧题。
+          </p>
         </div>
         <div className="stack-card">
-          <span>技术栈</span>
-          <strong>{project.stack}</strong>
+          <span>分层实现</span>
+          <strong>data · validation · training · ui</strong>
+          <button
+            className="ghost-action reset-btn"
+            onClick={() => {
+              store.resetDemo();
+              setCorrection(null);
+              setFormKey((k) => k + 1);
+              notify("已恢复演示数据", "ok");
+            }}
+          >
+            恢复演示数据
+          </button>
         </div>
       </section>
 
       <section className="metrics-grid">
-        {project.metrics.map((metric: string, index: number) => (
-          <MetricCard key={metric} label={metric} value={values[index]} index={index} />
+        <MetricCard label="版本链（酒款）" value={String(stats.chains)} tone="status-ok" />
+        <MetricCard
+          label="当前冲突酒款"
+          value={String(stats.conflictWines)}
+          tone={stats.conflictWines ? "status-danger" : "status-ok"}
+        />
+        <MetricCard label="可抽池 / 覆盖产区" value={`${stats.pool} / ${stats.regions}`} tone="status-watch" />
+        <MetricCard label="进行中 / 已归档批次" value={`${stats.openBatches} / ${stats.archived}`} tone="status-ok" />
+        <MetricCard label="保留的旧版本（旧题）" value={String(stats.oldVersions)} tone="status-watch" />
+      </section>
+
+      <WineForm
+        key={formKey}
+        correction={correction}
+        onFinish={finishCorrection}
+        notify={notify}
+      />
+
+      <ConflictPanel wines={state.wines} onCorrect={startCorrection} />
+
+      <BatchBoard state={state} notify={notify} />
+
+      <WineLibrary wines={state.wines} onCorrect={startCorrection} />
+
+      <div className="toast-stack" aria-live="polite">
+        {toasts.map((t) => (
+          <div key={t.id} className={`toast toast-${t.kind}`}>
+            {t.msg}
+          </div>
         ))}
-      </section>
-
-      <section className="workspace">
-        <aside className="panel narrow">
-          <h2>角色</h2>
-          <div className="chips">
-            {project.users.map((user: string) => (
-              <span key={user}>{user}</span>
-            ))}
-          </div>
-          <h2>筛选</h2>
-          <div className="chips muted">
-            {project.filters.map((filter: string) => (
-              <button key={filter}>{filter}</button>
-            ))}
-          </div>
-        </aside>
-
-        <section className="panel">
-          <div className="section-heading">
-            <div>
-              <p>{project.domain}</p>
-              <h2>记录字段</h2>
-            </div>
-            <button className="primary-action">新增记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
-      </section>
-
-      <section className="records panel">
-        <div className="section-heading">
-          <div>
-            <p>示例数据</p>
-            <h2>近期记录</h2>
-          </div>
-          <button>导出摘要</button>
-        </div>
-        <div className="record-list">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")} className="record-card">
-              <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+      </div>
     </main>
   );
 }
-
-export default App;
