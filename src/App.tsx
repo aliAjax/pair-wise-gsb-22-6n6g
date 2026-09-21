@@ -1,159 +1,129 @@
+import { useMemo } from "react";
 import "./styles.css";
+import { WineEntry } from "./components/WineEntry";
+import { ConflictReport } from "./components/ConflictReport";
+import { WineLibrary } from "./components/WineLibrary";
+import { BatchBoard } from "./components/BatchBoard";
+import { CellarProvider, useCellar } from "./state/CellarContext";
+import { conflictsByWine } from "./domain/validation";
 
 const project = {
-  "id": "hxwl-08",
-  "port": 5108,
-  "title": "葡萄酒盲品训练",
-  "subtitle": "产区、品种与感官特征的盲品复习系统",
-  "stack": "React + Vite + TypeScript + CSS",
-  "theme": [
-    "#9f1239",
-    "#047857",
-    "#d97706"
-  ],
-  "domain": "葡萄酒学习",
-  "users": [
-    "侍酒师学员",
-    "讲师",
-    "爱好者"
-  ],
-  "metrics": [
-    "复习卡片",
-    "易混淆酒款",
-    "正确率",
-    "产区覆盖"
-  ],
-  "filters": [
-    "波尔多",
-    "勃艮第",
-    "纳帕",
-    "里奥哈"
-  ],
-  "fields": [
-    "产区",
-    "葡萄品种",
-    "年份",
-    "酸度",
-    "单宁",
-    "酒体",
-    "香气关键词"
-  ],
-  "records": [
-    [
-      "左岸混酿",
-      "赤霞珠",
-      "高单宁",
-      "黑醋栗、雪松、铅笔芯"
-    ],
-    [
-      "勃艮第村级",
-      "黑皮诺",
-      "中等酒体",
-      "红樱桃、蘑菇、湿叶"
-    ],
-    [
-      "里奥哈珍藏",
-      "丹魄",
-      "橡木明显",
-      "香草、椰子、熟李子"
-    ]
-  ]
+  id: "hxwl-08",
+  port: 5108,
+  title: "盲品看板 · 酒款资料核验与训练批次闭环",
+  subtitle:
+    "录入绑定产区、法定品种、年份与适饮区间；三规则不通过不得入训；三款不同产区成批，讲师复核归档，修正带原因留版本，刷新后资料与批次一致。",
+  stack: "React + Vite + TypeScript + CSS · 数据 / 校验 / 页面三层分离 · localStorage 持久化",
 };
 
-const statusColors = ["status-ok", "status-watch", "status-danger"];
-
-function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
+function MetricCard({ label, value, hint, tone }: { label: string; value: string; hint: string; tone: string }) {
   return (
     <article className="metric-card">
       <span>{label}</span>
       <strong>{value}</strong>
-      <i className={statusColors[index % statusColors.length]} />
+      <p className="metric-hint">{hint}</p>
+      <i className={tone} />
     </article>
   );
 }
 
-function App() {
-  const values = project.metrics.map((metric: string, index: number) => {
-    const base = [84, 12, 31, 7][index % 4];
-    return String(base + index * 3);
-  });
+function Metrics() {
+  const { state } = useCellar();
+  const conflictMap = useMemo(() => conflictsByWine(state.wines), [state.wines]);
+  const pendingCount = conflictMap.size;
+
+  const openBatches = state.batches.filter((b) => b.status !== "archived");
+  const reviewCount = state.batches.filter((b) => b.status === "in_review").length;
+  const archivedCount = state.batches.filter((b) => b.status === "archived").length;
+  const occupiedWines = new Set(openBatches.flatMap((b) => b.items.map((i) => i.wineId))).size;
+  const versionCount = state.wines.reduce((n, w) => n + w.versions.length, 0);
 
   return (
-    <main className="app-shell">
-      <section className="hero">
-        <div>
-          <p className="eyebrow">{project.id} · port {project.port}</p>
-          <h1>{project.title}</h1>
-          <p className="subtitle">{project.subtitle}</p>
-        </div>
-        <div className="stack-card">
-          <span>技术栈</span>
-          <strong>{project.stack}</strong>
-        </div>
-      </section>
+    <section className="metrics-grid">
+      <MetricCard
+        label="酒款总数 / 待核"
+        value={`${state.wines.length} / ${pendingCount}`}
+        hint="冲突酒款不得进入训练池"
+        tone={pendingCount ? "status-danger" : "status-ok"}
+      />
+      <MetricCard
+        label="可抽取（入训池 − 占用）"
+        value={String(Math.max(0, state.wines.length - pendingCount - occupiedWines))}
+        hint={`入训池 ${state.wines.length - pendingCount} 款，未归档批次占用 ${occupiedWines} 款`}
+        tone="status-ok"
+      />
+      <MetricCard
+        label="进行中 / 待复核"
+        value={`${openBatches.length} / ${reviewCount}`}
+        hint="三款全部完成才能提交复核"
+        tone={reviewCount ? "status-watch" : "status-ok"}
+      />
+      <MetricCard
+        label="已归档 / 版本记录"
+        value={`${archivedCount} / ${versionCount}`}
+        hint="修正生成带原因新版本，旧题保留"
+        tone="status-ok"
+      />
+    </section>
+  );
+}
 
-      <section className="metrics-grid">
-        {project.metrics.map((metric: string, index: number) => (
-          <MetricCard key={metric} label={metric} value={values[index]} index={index} />
-        ))}
-      </section>
+function ResetButton() {
+  const { dispatch } = useCellar();
+  return (
+    <button
+      className="ghost-action"
+      onClick={() => {
+        if (window.confirm("恢复演示数据将清除本机全部酒款、批次与版本链，确定继续？")) {
+          dispatch({ type: "RESET_DEMO" });
+        }
+      }}
+    >
+      恢复演示数据
+    </button>
+  );
+}
 
-      <section className="workspace">
-        <aside className="panel narrow">
-          <h2>角色</h2>
-          <div className="chips">
-            {project.users.map((user: string) => (
-              <span key={user}>{user}</span>
-            ))}
-          </div>
-          <h2>筛选</h2>
-          <div className="chips muted">
-            {project.filters.map((filter: string) => (
-              <button key={filter}>{filter}</button>
-            ))}
-          </div>
-        </aside>
+function Board() {
+  return (
+    <>
+      <Metrics />
+      <div className="workspace-block">
+        <WineEntry />
+      </div>
+      <div className="workspace-block">
+        <BatchBoard />
+      </div>
+      <div className="workspace-block">
+        <ConflictReport />
+      </div>
+      <div className="workspace-block">
+        <WineLibrary />
+      </div>
+    </>
+  );
+}
 
-        <section className="panel">
-          <div className="section-heading">
-            <div>
-              <p>{project.domain}</p>
-              <h2>记录字段</h2>
-            </div>
-            <button className="primary-action">新增记录</button>
+function App() {
+  return (
+    <CellarProvider>
+      <main className="app-shell">
+        <section className="hero">
+          <div>
+            <p className="eyebrow">{project.id} · port {project.port}</p>
+            <h1>{project.title}</h1>
+            <p className="subtitle">{project.subtitle}</p>
           </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
+          <div className="stack-card">
+            <span>实现结构</span>
+            <strong>{project.stack}</strong>
+            <span className="persist-note">数据实时写入 localStorage，刷新后酒款、批次与版本链一致。</span>
+            <ResetButton />
           </div>
         </section>
-      </section>
-
-      <section className="records panel">
-        <div className="section-heading">
-          <div>
-            <p>示例数据</p>
-            <h2>近期记录</h2>
-          </div>
-          <button>导出摘要</button>
-        </div>
-        <div className="record-list">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")} className="record-card">
-              <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
-    </main>
+        <Board />
+      </main>
+    </CellarProvider>
   );
 }
 
